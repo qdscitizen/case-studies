@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>案例复盘 #001 · Database Error (MAX_JOIN_SIZE)</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 40px 24px;
+    color: #222;
+    line-height: 1.75;
+    background: #fafafa;
+  }
+  h1 { font-size: 25px; border-bottom: 3px solid #d9534f; padding-bottom: 12px; }
+  h2 { font-size: 20px; margin-top: 42px; color: #b52b27; }
+  h3 { font-size: 16px; margin-top: 22px; }
+  .meta { color: #888; font-size: 13px; margin-bottom: 28px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; background: #fff; }
+  th, td { border: 1px solid #ddd; padding: 10px 12px; text-align: left; font-size: 14px; vertical-align: top; }
+  th { background: #fdf0ef; color: #b52b27; }
+  tr:nth-child(even) td { background: #fcf6f6; }
+  .callout { background: #fff8e6; border-left: 4px solid #f5a623; padding: 12px 16px; margin: 16px 0; border-radius: 4px; font-size: 14px; }
+  .callout.ok { background: #eaf7ea; border-left-color: #4caf50; }
+  .callout.warn { background: #fdeaea; border-left-color: #d9534f; }
+  .callout.blue { background: #eef4fd; border-left-color: #2c7be5; }
+  .step { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px 18px; margin: 10px 0; }
+  .step b.t { color: #b52b27; }
+  .code {
+    font-family: Consolas, "Courier New", monospace;
+    background: #1e1e1e; color: #d4d4d4;
+    padding: 14px 16px; border-radius: 6px;
+    font-size: 13px; overflow-x: auto; white-space: pre;
+    margin: 12px 0; line-height: 1.5;
+  }
+  .code .hl { color: #ffd700; font-weight: bold; }
+  .code .cm { color: #6a9955; }
+  code.inline { background: #f0f0f0; padding: 1px 6px; border-radius: 3px; font-size: 13px; color: #b52b27; font-weight: 600; }
+  .quote-en { background: #f8f9fa; border-left: 4px solid #6c757d; padding: 10px 14px; margin: 10px 0; font-style: italic; font-size: 14px; }
+  .arrow { color: #b52b27; font-weight: bold; }
+  .footer { margin-top: 50px; color: #999; font-size: 12px; border-top: 1px solid #ddd; padding-top: 16px; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; margin-right: 6px; }
+  .badge.type { background: #fdeaea; color: #b52b27; }
+  .badge.status { background: #fff3cd; color: #856404; }
+  .tag { display: inline-block; background: #eef4fd; color: #1a5bb8; font-size: 12px; padding: 2px 8px; border-radius: 10px; margin-right: 4px; }
+</style>
+</head>
+<body>
+
+<h1>案例复盘 #001 · Database Error (MAX_JOIN_SIZE)</h1>
+<div class="meta">
+  <span class="badge type">诊断型案例</span>
+  <span class="badge status">已回复 · 等 Mick 确认</span><br><br>
+  帖子:<span class="url" style="font-family:Consolas,monospace;font-size:13px;background:#f0f0f0;padding:2px 6px;border-radius:4px;">https://wordpress.org/support/topic/database-error-435/</span><br>
+  客户:Mick(@haarbollen)· 非技术用户 · WooCommerce 商店主<br>
+  我的角色:论坛诊断(免费,攒履历)· 交付方式:公开回复完整解法<br>
+  标签:<span class="tag">woocommerce</span><span class="tag">database-error</span><span class="tag">meta-key-fingerprint</span><span class="tag">hosting-limit</span>
+</div>
+
+<h2>一、问题是什么(客户视角)</h2>
+
+<div class="step">
+Mick 登录 WordPress 后台,页面顶部出现一条「吓人」的数据库报错;同时<b>更新任何插件都会失败</b>,提示同样的错误。他已尝试:禁用四个待更新插件(无效)、发邮件给主机商(等回复中)。
+</div>
+
+<h2>二、报错原文(证据保留)</h2>
+
+<div class="code">Update failed: WordPress database error:
+[The SELECT would examine more than <span class="hl">MAX_JOIN_SIZE</span> rows;
+check your WHERE and use SET SQL_BIG_SELECTS=1 or SET MAX_JOIN_SIZE=# if the SELECT is okay]
+
+SELECT wp_posts.ID FROM wp_posts
+INNER JOIN wp_postmeta ON ( wp_posts.ID = wp_postmeta.post_id )
+INNER JOIN wp_postmeta AS mt1 ON ( wp_posts.ID = mt1.post_id )
+WHERE 1=1
+AND ( ( wp_postmeta.meta_key = <span class="hl">'_alg_wc_pvbur_visible'</span>
+        AND wp_postmeta.meta_value != '' )
+   OR ( mt1.meta_key = <span class="hl">'_alg_wc_pvbur_invisible'</span>
+        AND mt1.meta_value != '' ) )
+AND wp_posts.post_type = 'product'
+AND ((wp_posts.post_status = 'publish'))
+GROUP BY wp_posts.ID ORDER BY wp_posts.post_date DESC LIMIT 0, 1</div>
+
+<h2>三、原因 —— 三层因果链</h2>
+
+<h3>3.1 先纠正常见误解</h3>
+<table>
+<tr><th>误解</th><th>真相</th></tr>
+<tr><td>「用户选择的数量超过上限」</td><td>无关。<b>用户什么都没多选</b>,只是更新插件这个常规动作</td></tr>
+<tr><td>「WordPress 配置的上限」</td><td>无关。<b>MAX_JOIN_SIZE 是 MySQL 服务器(主机商)设的</b>,WP 核心不管这个</td></tr>
+<tr><td>「查询太复杂,WP 有 bug」</td><td>WP 没坏。是<b>某个插件生成了这条重查询</b>,撞上了主机的防护栏</td></tr>
+</table>
+
+<h3>3.2 三层因果链(从表到里)</h3>
+
+<div class="step">
+<b class="t">表层 · 主机设了防护栏</b><br>
+共享主机商为了防止一个租户的慢查询拖死整台服务器,把 MySQL 的 <code class="inline">MAX_JOIN_SIZE</code>
+设得很低(如几万行)。含义:<b>单条 SELECT 查询最多允许「扫描/检查」这么多行,超了直接拒绝执行</b>。
+相当于浏览器「脚本执行超时」的数据库版。
+</div>
+
+<div class="step">
+<b class="t">中层 · 这条查询扫描量天然爆炸</b><br>
+<code class="inline">wp_postmeta</code> 是 WP 里最大的表之一(每个产品几十条 meta,万产品站 = 几十万行)。
+这条查询把 postmeta <b>JOIN 了两次</b>(别名 mt1),再按自定义字段 OR 过滤 ——
+MySQL 需要检查的行数是<b>乘积级</b>的,轻松超过几万行的上限。
+</div>
+
+<div class="step">
+<b class="t">里层 · 谁生成了这条查询?—— 指纹破案</b><br>
+看 WHERE 条件里的两个 meta_key:<code class="inline">_alg_wc_pvbur_visible</code> / <code class="inline">_alg_wc_pvbur_invisible</code><br><br>
+<b>meta_key 是插件的数据指纹</b>(每个插件给自定义字段加独特前缀)。拆解前缀:<br>
+<code class="inline">_alg</code> = 作者代号(Algolplus)· <code class="inline">_wc</code> = WooCommerce ·
+<code class="inline">_pvbur</code> = <b>P</b>rivate <b>V</b>isibility(隐藏产品的功能)<br><br>
+Google 精确搜索 <code class="inline">"_alg_wc_pvbur_visible"</code> → 命中
+<b>Algolplus 出品的 Private Products / 目录可见性类付费插件</b>。
+经查 WP.org 插件 API:<b>该插件不在免费目录</b> —— 这解释了 Mick 为什么没想到它
+(付费插件不显示在「待更新列表」里,他禁用的四个里自然没有它)。
+</div>
+
+<h3>3.3 为什么 Mick 禁插件无效(关键推理)</h3>
+<div class="callout warn">
+Mick 禁用的是<b>四个「待更新的插件」</b>(其中含报错 JSON 里正在更新的 woo-extra-product-options)。
+但生成慢查询的是 <b>另一个付费插件</b> —— 不在更新列表里,所以他<b>禁错了对象</b>,真凶还活着,
+每次进后台/更新都照跑。<br><br>
+<b>教训:禁用测试要覆盖「所有活跃插件」,尤其是「不显示在更新列表里的付费插件」—— 它们最容易被排除出嫌疑。</b>
+</div>
+
+<h2>四、解决办法(已回复给 Mick 的三层方案)</h2>
+
+<table>
+<tr><th>层</th><th>动作</th><th>效果</th><th>谁执行</th></tr>
+<tr>
+<td><b>① 快速验证</b>(5分钟)</td>
+<td>插件列表里找 Private Products / catalog visibility 类插件(Algolplus 出品)→ <b>停用</b> → 刷新后台/再试更新</td>
+<td>报错消失 = 确认真凶</td>
+<td>Mick 自己</td>
+</tr>
+<tr>
+<td><b>② 根治</b></td>
+<td>确认后:该插件更新到新版(反馈 Algolplus,这条双 JOIN 查询本身写得差);或不再需要「隐藏产品」功能就直接删除插件(残留 meta 无害)</td>
+<td>问题不再发生</td>
+<td>Mick</td>
+</tr>
+<tr>
+<td><b>③ 治标</b>(主机侧)</td>
+<td>主机调大 <code class="inline">MAX_JOIN_SIZE</code> 或对该库 <code class="inline">SET sql_big_selects=1</code>。Mick 已联系主机 —— 把报错原文发给主机,他们知道改什么</td>
+<td>错误立刻消失,但坏查询还在跑(只是允许跑了)</td>
+<td>主机商</td>
+</tr>
+</table>
+
+<div class="callout">
+<b>三层思维(修站通用框架):</b>快速验证(确认真凶)→ 根治(消灭原因)→ 治标(绕过限制)。
+顺序不要反 —— 只做③会让坏查询继续在后台跑,只是没人报警了。
+</div>
+
+<h2>五、知识点沉淀(可复用)</h2>
+
+<h3>5.1 「从报错反推真凶」的指纹法 ⭐ 本案例核心</h3>
+<table>
+<tr><th>报错类型</th><th>指纹在哪</th><th>反查到什么</th></tr>
+<tr><td>SQL 报错</td><td>meta_key / 表名前缀</td><td>生成该查询的插件</td></tr>
+<tr><td>PHP Fatal Error</td><td>文件路径 <code class="inline">/plugins/xxx/src/File.php</code></td><td>路径直接点名插件</td></tr>
+<tr><td>JS 报错</td><td>source URL / 组件名</td><td>主题或插件的脚本</td></tr>
+<tr><td>CSS 互殴</td><td>类名前缀(<code class="inline">.alg-</code> <code class="inline">.yith-</code>)</td><td>主题/插件</td></tr>
+</table>
+<div class="callout blue">
+<b>前端口径:</b>就像报错 <code class="inline">Cannot read properties of undefined at UserCard.vue:87</code>
+—— 文件名就是凶手的门牌号。SQL 里的 <code class="inline">meta_key</code> 就是数据库世界的文件名。<br>
+<b>习惯:报错原文永远读完,里面的每个名字都值得 Google 一次(精确短语搜索)。</b>
+</div>
+
+<h3>5.2 MAX_JOIN_SIZE / SQL_BIG_SELECTS 速查</h3>
+<table>
+<tr><th>项</th><th>内容</th></tr>
+<tr><td>归属</td><td>MySQL 服务器变量(不是 WordPress 的)</td></tr>
+<tr><td>作用</td><td>限制单条 SELECT 允许扫描的最大行数,防慢查询拖死共享服务器</td></tr>
+<tr><td>谁设置</td><td>主机商(my.cnf / 面板);个人无法在 WP 里改</td></tr>
+<tr><td>解法</td><td>让主机调大,或对库执行 <code class="inline">SET sql_big_selects=1</code>(治标);优化/移除生成重查询的插件(治本)</td></tr>
+<tr><td>英文沟通</td><td>"The failing query joins wp_postmeta twice and exceeds your MAX_JOIN_SIZE limit. Could you raise the limit (or set sql_big_selects=1) for my database?"</td></tr>
+</table>
+
+<h3>5.3 meta_key 前缀速查(指纹库,持续积累)</h3>
+<table>
+<tr><th>前缀</th><th>归属</th></tr>
+<tr><td><code class="inline">_sku _price _stock _wc_</code></td><td>WooCommerce 核心</td></tr>
+<tr><td><code class="inline">_yoast_wpseo_</code></td><td>Yoast SEO</td></tr>
+<tr><td><code class="inline">_elementor_</code></td><td>Elementor</td></tr>
+<tr><td><code class="inline">alg_wc_ / _alg_</code></td><td>Algolplus 系列插件</td></tr>
+<tr><td><code class="inline">_alg_wc_pvbur_</code></td><td>Algolplus · Private Products(付费)</td></tr>
+</table>
+
+<h3>5.4 本案例英文关键词(已回写题库素材)</h3>
+<p>
+<span class="tag">database error</span>
+<span class="tag">examine more than MAX_JOIN_SIZE rows</span>
+<span class="tag">meta_key fingerprint</span>
+<span class="tag">JOIN the postmeta table twice</span>
+<span class="tag">hosting-level MySQL limit</span>
+<span class="tag">raise the limit</span>
+<span class="tag">set sql_big_selects=1</span>
+<span class="tag">deactivate the plugin</span>
+<span class="tag">leftover data is harmless</span>
+<span class="tag">report back what you find</span>
+</p>
+
+<h2>六、已交付的回复(存档)</h2>
+
+<div class="code" style="background:#f8f9fa;color:#333;">I'd zoom in on this part of the query:
+
+wp_postmeta.meta_key = '_alg_wc_pvbur_visible' / mt1.meta_key = '_alg_wc_pvbur_invisible'
+
+Those meta keys are added by a private products / catalog visibility plugin
+(the _alg_wc_pvbur_ prefix belongs to an Algolplus plugin). Since it's a premium
+plugin, it wouldn't appear in your "updates available" list — which may be why
+it wasn't caught when you disabled the four pending-update ones.
+
+Two things to try:
+
+1. Find the culprit: check your plugin list for anything named like
+   "Private Products" / "Private Store" / catalog visibility (by Algolplus).
+   Deactivate it and reload the dashboard — the error should be gone.
+   If it is, check that plugin for an update, or remove it if you don't
+   need the "hide products" feature.
+
+2. The host side: you did the right thing emailing your provider.
+   MAX_JOIN_SIZE is a MySQL server limit (a protection on shared hosting),
+   not a WordPress setting. They can raise it (SET SQL_BIG_SELECTS=1 or
+   increase MAX_JOIN_SIZE) — send them the error and they'll know exactly
+   what to change.
+
+Step 1 tells you whether the plugin is the trigger; step 2 removes the hard
+ceiling either way. Please report back what you find!</div>
+
+<h2>七、回复后我要干什么(跟进清单)</h2>
+
+<div class="step">
+<b class="t">① 勾选邮件通知</b> —— 回复框里的「Notify me of follow-up replies via email」记得勾上;163 邮箱注意翻垃圾箱
+</div>
+<div class="step">
+<b class="t">② 48 小时内每天看一次帖子</b> —— 三种走向:
+<table>
+<tr><th>Mick 的反应</th><th>我的动作</th></tr>
+<tr><td>「停用插件后解决了!」</td><td>跟进要证言:<i>"Glad that fixed it! I'm building my portfolio as a WordPress developer — a short testimonial about this fix would mean a lot. Either way, happy your store is back on track!"</i></td></tr>
+<tr><td>「插件列表里没找到那个插件」</td><td>升级诊断:让他跑 SQL 查 meta_key 来源(<code class="inline">SELECT DISTINCT meta_key FROM wp_postmeta WHERE meta_key LIKE '%pvbur%'</code>),或请他贴插件列表截图</td></tr>
+<tr><td>没反应</td><td>2-3 天后礼貌 bump 一次;再无回应 → 案例归档(诊断过程已完整,照样可写 case study)</td></tr>
+</table>
+</div>
+<div class="step">
+<b class="t">③ 无论结果,24h 内写英文 case study</b> —— 存 GitHub 证言墙/case-studies repo:
+<b>结构:背景(shop owner hit DB error on dashboard)→ 诊断(read raw SQL, fingerprinted _alg_wc_pvbur_ meta key)→ 修复(premium plugin wasn't in update list; deactivate + host limit workaround)→ 结果(pending)</b>
+</div>
+<div class="step">
+<b class="t">④ 顺手把指纹入库</b> —— <code class="inline">_alg_wc_pvbur_</code> 加进你的 meta_key 指纹库(本文件 5.3 表);以后遇到同类报错秒判
+</div>
+
+<div class="callout ok">
+<b>本案例的资产清单(已到手的):</b>
+✅ WP.org 档案第一条公开回复(诊断型,展示读 SQL 能力)<br>
+✅ 一个可写的英文 case study(等结果补「结果」段)<br>
+⏳ 待收:证言(取决于 Mick 反馈)· ⏳ 待收:resolved 标记
+</div>
+
+<div class="footer">
+案例复盘 #001 · 2026-10-09 · 诊断耗时约 30 分钟(读报错+查插件API+写回复)·
+下一案目标:动手型(需 SFTP/后台权限的真实修复)· 本文件同时是 case study 的中文底稿
+</div>
+
+</body>
+</html>
