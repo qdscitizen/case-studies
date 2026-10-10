@@ -23,7 +23,7 @@ WordPress plugin author & troubleshooter. 10 years of frontend engineering (Vue/
 > *"DraftLab AI found the cause of a database error that was blocking all plugin updates on my WooCommerce store — something even my host couldn't figure out. Quick, clear and professional. Thank you so much!"*
 > — Mick (@haarbollen), thread starter
 
-**Evidence:** [case-001-evidence-card.png](case-001-evidence-card.png) — full thread snapshot (diagnosis → fix → resolved → testimonial)
+**Evidence:** [case-001-original-thread-fullpage.png](case-001-original-thread-fullpage.png) — full original thread on wordpress.org (diagnosis → fix → resolved → client testimonial, as it appeared)
 
 ---
 
